@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QRACS</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; transition: background-color 0.5s; }
+    #reader { width: 100%; max-width: 500px; margin: 0 auto; border-radius: 8px; overflow: hidden; }
+    
+    /* 結果表示エリアのスタイル */
+    #result-container { margin-top: 20px; padding: 15px; border-radius: 8px; min-height: 8em; }
+    #message { 
+      font-weight: bold; 
+      font-size: 1.4em; 
+      display: inline-block; 
+      padding: 8px 15px; 
+      border-radius: 6px;
+      transition: background-color 0.3s;
+    }
+    #extra-info { margin-top: 15px; font-size: 1.2em; color: #333; font-weight: bold; }
+    
+    /* ボタンのスタイル */
+    .controls { margin-top: 20px; }
+    button { padding: 12px 24px; font-size: 16px; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; margin: 5px; }
+    
+    #next-btn-container { margin-top: 20px; }
+    #next-btn { 
+      display: none; 
+      background-color: #007bff; 
+      color: white; 
+      border: none; 
+      width: 80%; 
+      max-width: 300px; 
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    /* 状態ごとの文字背景色クラス */
+    .bg-none { background-color: transparent; }
+    .bg-success { background-color: #ccffcc; color: #006600; } /* 新規更新時：緑 */
+    .bg-already { background-color: #ffff99; color: #666600; } /* 照合済み時：黄 */
+    .bg-error { background-color: #ffcccc; color: #cc0000; }   /* エラー時：赤 */
+
+    .normal-body { background-color: #ffffff; }
+  </style>
+</head>
+<body class="normal-body" id="bodyWrap">
+
+  <h2>QRスキャンシステム<br>イベント同窓会<br>2026/00/00</h2>
+  
+  <div id="reader"></div>
+
+  <div class="controls">
+    <button id="switch-btn">カメラを切り替える</button>
+  </div>
+
+  <div id="result-container">
+    <div id="message" class="bg-none">準備完了．スキャンしてください．</div>
+    <div id="extra-info"></div>
+    
+    <div id="next-btn-container">
+      <button id="next-btn">次のスキャン</button>
+    </div>
+  </div>
+
+  <script>
+    /* 【変更】本番用のGAS URLを隠蔽し，ダミーの文字列に置き換えました */
+    const GAS_URL = "https://script.google.com/macros/s/YOUR_GAS_DEPLOYMENT_ID/exec"; 
+    
+    const html5QrCode = new Html5Qrcode("reader");
+    const messageDiv = document.getElementById("message");
+    const extraInfoDiv = document.getElementById("extra-info");
+    const bodyWrap = document.getElementById("bodyWrap");
+    const nextBtn = document.getElementById("next-btn");
+    const switchBtn = document.getElementById("switch-btn");
+
+    // 初期状態ではカメラ切り替えボタンを非表示にする
+    switchBtn.style.display = "none";
+
+    let currentFacingMode = "environment";
+    let isScanning = true;
+
+    const onScanSuccess = (decodedText) => {
+      if (!isScanning) return;
+      isScanning = false;
+
+      html5QrCode.stop().then(() => {
+        // スキャン成功（停止）したらボタンを隠す
+        switchBtn.style.display = "none"; 
+        messageDiv.innerText = "照合中...";
+        messageDiv.className = "bg-none";
+        extraInfoDiv.innerText = "";
+        
+        fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ qrData: decodedText })
+        })
+        .then(res => res.json())
+        .then(data => {
+          messageDiv.innerText = data.message;
+          if (data.message === "すでに照合済み") {
+            messageDiv.className = "bg-already";
+          } else if (data.success) {
+            messageDiv.className = "bg-success";
+          } else {
+            messageDiv.className = "bg-error";
+          }
+
+          if (data.extraData) {
+            extraInfoDiv.innerText = "詳細情報: " + data.extraData;
+          }
+          nextBtn.style.display = "inline-block";
+        })
+        .catch(err => {
+          messageDiv.innerText = "通信エラーが発生しました．";
+          messageDiv.className = "bg-error";
+          nextBtn.style.display = "inline-block";
+        });
+      }).catch(err => {
+        console.error("Camera stop error:", err);
+      });
+    };
+
+    const startScanner = (mode) => {
+      // 起動試行中は念のため隠しておく
+      switchBtn.style.display = "none";
+
+      html5QrCode.start(
+        { facingMode: mode },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        onScanSuccess
+      ).then(() => {
+        // ★カメラの起動に成功した時のみ、切り替えボタンを表示する
+        switchBtn.style.display = "inline-block";
+      }).catch(err => {
+        // 起動に失敗した時は非表示のまま
+        switchBtn.style.display = "none";
+        messageDiv.innerText = "カメラの起動に失敗しました．権限を確認してください．";
+      });
+    };
+
+    switchBtn.addEventListener("click", () => {
+      currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
+      html5QrCode.stop().then(() => {
+        startScanner(currentFacingMode);
+      }).catch(() => {
+        startScanner(currentFacingMode);
+      });
+    });
+
+    nextBtn.addEventListener("click", () => {
+      isScanning = true;
+      nextBtn.style.display = "none";
+      messageDiv.innerText = "スキャンを待機中...";
+      messageDiv.className = "bg-none";
+      extraInfoDiv.innerText = "";
+      startScanner(currentFacingMode);
+    });
+
+    // 初回起動
+    startScanner(currentFacingMode);
+</script>
+</body>
+</html>
